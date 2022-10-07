@@ -12,7 +12,7 @@ Estas operaciones *destruyen información*, es decir, el promedio, suma o conteo
 
 Como analistas de datos pocas veces haremos agregaciones directo en las bases de datos fuente, y probablemente primero las movamos a nuestro data lake y ahí hacerlas. Pero si no tuvieramos uno, esta es la forma de hacerlas:
 
-Para esta parte de la sesión vamos a crear la BD ~3tdb~ y laa colecciones ~universities~ y ~courses~
+Para esta parte de la sesión vamos a crear la BD ~3tdb~ y las colecciones ~universities~ y ~courses~
 
 #+begin_src js
   use 3tdb;
@@ -214,7 +214,7 @@ En caso de que deseemos hacer una agregación de todos los documentos, sin armar
   db.universities.aggregate([
       { $match:{country: 'Spain', city: 'Salamanca'} },
       { $project:{_id : 0, country : 1, city : 1, name : 1} },
-      { $group: { _id: null, conteo: { $count: {} } } }
+      { $group: { _id: null, conteo: { $count:{} } } },
       { $project: { _id: 0, conteo:1 } }
   ])
 #+end_src
@@ -232,7 +232,7 @@ Toma la ejecución de toda la salida del pipeline y lo guarda en otra colección
 #+begin_src js
   db.universities.aggregate([
       { $match:{country: 'Spain', city: 'Salamanca'} },
-      { $project:{_id : 0, country : 1, city : 1, name : 1} },
+      { $project:{ country : 1, city : 1, name : 1} },
       { $group:{_id: "$name", conteo:{$sum:1}} },
       { $project:{_id : 0, "uni" : "$_id", conteo:1} },
       { $out:"miranomas" }
@@ -391,7 +391,7 @@ O acumular los alumnos de cada año:
       { $unwind: '$students' },
       { $project: { _id: 0, "name": 1, 'students.year': 1, 'students.number': 1 } },
       { $group: { _id: "$students.year", totalAlumnos: { $sum: "$students.number" } } },
-      {$project:{_id:0,"ano":"$_id",totalAlumnos:1}}
+      {$project:{_id:0,"year":"$_id",totalAlumnos:1}}
   ])
 #+end_src
 
@@ -565,8 +565,7 @@ Cómo podemos agregar un atributo a cada restaurante para tener su score total a
       {$unwind:"$grades"},
       {$project:{"grades.score":1, "name":1}},
       {$group:{_id:"$name", "gradeArray":{$push:"$grades.score"}}},
-      {$project:{"name":"$_id",_id:0,"gradeArray":1}},
-      {$addFields:{"totalScore":{$sum:"$gradeArray"},"avgScore":{$avg:"$gradeArray"}}}
+      {$project:{"name":"$_id",_id:0,"gradeArray":1}},      {$addFields:{"totalScore":{$sum:"$gradeArray"},"avgScore":{$avg:"$gradeArray"}}}
   ])
 #+end_src
 
@@ -607,7 +606,10 @@ Insertemos esta base de datos de obras de arte:
 Si ejecutamos la siguiente agregación:
 
 #+begin_src js
-  db.exhibits.aggregate( [ { $unwind: "$tags" },  { $sortByCount: "$tags" } ] )
+  db.artwork.aggregate([
+      { $unwind: "$tags" },
+      { $sortByCount: "$tags" }
+  ] )
 #+end_src
 
 Tendremos la salida:
@@ -626,150 +628,6 @@ Tendremos la salida:
 #+end_src
 
 Esto es, cuenta los elementos comunes y los ordena por el num de ocurrencias.
-
-* Queries analíticos avanzados
-
-1. Cuál es el promedio de ~score~ por ~type~ de evaluación y por ~class_id~ en la BD ~sample_training~ en la colección ~grades~?
-
-Para esto debemos descargar [[https://github.com/Skalas/nosql2022/raw/main/datasets/grades.zip][esta BD de calificaciones]] e insertarla con ~mongoimport~:
-
-#+begin_src shell
-mongoimport --db=sample_training --collection=grades
-#+end_src
-
-Primero debemos enterarnos de qué va la BD. Vamos a sacar los primeros 3 registros para ver de qué tratan:
-
-#+begin_src js
-  use sample_training
-  db.grades.find().limit(3)
-
-  [
-      {
-          _id: ObjectId("56d5f7eb604eb380b0d8d8ce"),
-          student_id: 0,
-          scores: [
-              { type: 'exam', score: 78.40446309504266 },
-              { type: 'quiz', score: 73.36224783231339 },
-              { type: 'homework', score: 46.980982486720535 },
-              { type: 'homework', score: 76.67556138656222 }
-          ],
-          class_id: 339
-      },
-      {
-          _id: ObjectId("56d5f7eb604eb380b0d8d8d6"),
-          student_id: 0,
-          scores: [
-              { type: 'exam', score: 25.926204502143857 },
-              { type: 'quiz', score: 37.23668404170315 },
-              { type: 'homework', score: 19.609679551976487 },
-              { type: 'homework', score: 98.7923690220697 }
-          ],
-          class_id: 108
-      },
-      {
-          _id: ObjectId("56d5f7eb604eb380b0d8d8da"),
-          student_id: 1,
-          scores: [
-              { type: 'exam', score: 95.4702770345805 },
-              { type: 'quiz', score: 59.14125426136129 },
-              { type: 'homework', score: 34.32836889016887 },
-              { type: 'homework', score: 84.07534235774499 }
-          ],
-          class_id: 237
-      }
-  ]
-#+end_src
-
-Parece que son calificaciones de un alumno, de una clase, para diferentes mecanismos de evaluación: examen, quiz, y tareas.
-
-Qué tipo de relación hay entre ~student_id~ y ~class_id~? Cuál es el punto de vista de esta estructura? "Una clase tiene N alumnos?", o "un alumno tiene N clases?".
-
-Primero, veamos cuantos registros tenemos:
-
-#+begin_src js
-  db.grades.find().count()
-
-  1000000
-#+end_src
-
-Si la perspectiva está anclada en ~class_id~, entonces deberíamos tener 1000000 clases, o 1000000 estudiantes si la perspectiva está en ~student_id~.
-
-#+begin_src js
-  db.grades.distinct("class_id")
-
-  [
-      0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,
-      12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-      24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
-      36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
-      60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
-      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
-      84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
-      96, 97, 98, 99,
-      ... 401 more items
-  ]
-#+end_src
-
-De acuerdo a esto, el universo de clases es mucho menor, por lo que probablemente esta colección esté armada desde la perspectiva del estudiante.
-
-#+begin_src js
-  db.grades.distinct("student_id")
-
-  [
-      0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,
-      12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-      24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
-      36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
-      60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
-      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
-      84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
-      96, 97, 98, 99,
-      ... 9900 more items
-  ]
-#+end_src
-
-Ahora vamos a tratar de armar el query para dar respuesta a la pregunta inicial:
-
-#+begin_src js
-  db.grades.aggregate([
-      {$unwind:"$scores"},{$project:{"student_id":0}},
-      {$group:{_id:{"clase":"$class_id","eval":"$scores.type"}, "promedio":{$avg:"$scores.score"}}},
-      {$sort:{"_id.clase":1,"_id.eval":1}}
-  ])
-
-#+end_src
-
-Nuestro resultado es:
-
-#+begin_src js
-  [
-      { _id: { clase: 0, eval: 'exam' }, promedio: 46.224870203904395 },
-      { _id: { clase: 0, eval: 'homework' }, promedio: 49.6592370300883 },
-      { _id: { clase: 0, eval: 'quiz' }, promedio: 49.38124259163944 },
-      { _id: { clase: 1, eval: 'exam' }, promedio: 50.78357850094616 },
-      { _id: { clase: 1, eval: 'homework' }, promedio: 49.18339520790678 },
-      { _id: { clase: 1, eval: 'quiz' }, promedio: 51.68365158823541 },
-      { _id: { clase: 2, eval: 'exam' }, promedio: 51.212269415215715 },
-      { _id: { clase: 2, eval: 'homework' }, promedio: 48.635517471345494 },
-      { _id: { clase: 2, eval: 'quiz' }, promedio: 49.22183768413837 },
-      { _id: { clase: 3, eval: 'exam' }, promedio: 49.24088016851434 },
-      { _id: { clase: 3, eval: 'homework' }, promedio: 49.32958980280401 },
-      { _id: { clase: 3, eval: 'quiz' }, promedio: 49.70705542324686 },
-      { _id: { clase: 4, eval: 'exam' }, promedio: 48.45214274611575 },
-      { _id: { clase: 4, eval: 'homework' }, promedio: 51.336198599567986 },
-      { _id: { clase: 4, eval: 'quiz' }, promedio: 52.186677392814204 },
-      { _id: { clase: 5, eval: 'exam' }, promedio: 51.91626171544547 },
-      { _id: { clase: 5, eval: 'homework' }, promedio: 49.71133512774075 },
-      { _id: { clase: 5, eval: 'quiz' }, promedio: 48.17571458478485 },
-      { _id: { clase: 6, eval: 'exam' }, promedio: 54.20236080762028 },
-      { _id: { clase: 6, eval: 'homework' }, promedio: 49.441178234623834 },
-      ...,
-      ...,
-      ...,
-  ]
-#+end_src
 
 * Stage ~$lookup~
 
@@ -864,3 +722,144 @@ Posterior a esto podríamos continuar el pipeline, por ejemplo, para contar los 
   ])
 #+end_src
 
+* Queries analíticos avanzados
+
+1. Cuál es el promedio de ~score~ por ~type~ de evaluación y por ~class_id~ en la BD ~sample_training~ en la colección ~grades~?
+
+Para esto debemos descargar [[https://github.com/Skalas/nosql2022/raw/main/datasets/grades.zip][esta BD de calificaciones]] e insertarla con ~mongoimport~:
+
+#+begin_src shell
+cat grades.json | docker exec -i  mongoimport --db=sample_training --collection=grades
+#+end_src
+
+Primero debemos enterarnos de qué va la BD. Vamos a sacar los primeros 3 registros para ver de qué tratan:
+
+#+begin_src js
+  use sample_training
+  db.grades.find().limit(3)
+
+  [
+      {
+          _id: ObjectId("56d5f7eb604eb380b0d8d8ce"),
+          student_id: 0,
+          scores: [
+              { type: 'exam', score: 78.40446309504266 },
+              { type: 'quiz', score: 73.36224783231339 },
+              { type: 'homework', score: 46.980982486720535 },
+              { type: 'homework', score: 76.67556138656222 }
+          ],
+          class_id: 339
+      },
+      {
+          _id: ObjectId("56d5f7eb604eb380b0d8d8d6"),
+          student_id: 0,
+          scores: [
+              { type: 'exam', score: 25.926204502143857 },
+              { type: 'quiz', score: 37.23668404170315 },
+              { type: 'homework', score: 19.609679551976487 },
+              { type: 'homework', score: 98.7923690220697 }
+          ],
+          class_id: 108
+      },
+      {
+          _id: ObjectId("56d5f7eb604eb380b0d8d8da"),
+          student_id: 1,
+          scores: [
+              { type: 'exam', score: 95.4702770345805 },
+              { type: 'quiz', score: 59.14125426136129 },
+              { type: 'homework', score: 34.32836889016887 },
+              { type: 'homework', score: 84.07534235774499 }
+          ],
+          class_id: 237
+      }
+  ]
+#+end_src
+
+Parece que son calificaciones de un alumno, de una clase, para diferentes mecanismos de evaluación: examen, quiz, y tareas.
+
+Qué tipo de relación hay entre ~student_id~ y ~class_id~? Cuál es el punto de vista de esta estructura? "Una clase tiene N alumnos?", o "un alumno tiene N clases?".
+
+Primero, veamos cuantos registros tenemos:
+
+#+begin_src js
+  db.grades.find().count()
+#+end_src
+
+Si la perspectiva está anclada en ~class_id~, entonces deberíamos tener 1000000 clases, o 1000000 estudiantes si la perspectiva está en ~student_id~.
+
+#+begin_src js
+  db.grades.distinct("class_id")
+
+  [
+      0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,
+      12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+      24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+      36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+      60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
+      84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+      96, 97, 98, 99,
+      ... 401 more items
+  ]
+#+end_src
+
+De acuerdo a esto, el universo de clases es mucho menor, por lo que probablemente esta colección esté armada desde la perspectiva del estudiante.
+
+#+begin_src js
+  db.grades.distinct("student_id")
+
+  [
+      0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,
+      12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+      24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+      36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+      60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
+      84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+      96, 97, 98, 99,
+      ... 9900 more items
+  ]
+#+end_src
+
+Ahora vamos a tratar de armar el query para dar respuesta a la pregunta inicial:
+
+#+begin_src js
+  db.grades.aggregate([
+      {$unwind:"$scores"},{$project:{"student_id":0}},
+      {$group:{_id:{"clase":"$class_id","eval":"$scores.type"}, "promedio":{$avg:"$scores.score"}}},
+      {$sort:{"_id.clase":1,"_id.eval":1}}
+  ])
+
+#+end_src
+
+Nuestro resultado es:
+
+#+begin_src js
+  [
+      { _id: { clase: 0, eval: 'exam' }, promedio: 46.224870203904395 },
+      { _id: { clase: 0, eval: 'homework' }, promedio: 49.6592370300883 },
+      { _id: { clase: 0, eval: 'quiz' }, promedio: 49.38124259163944 },
+      { _id: { clase: 1, eval: 'exam' }, promedio: 50.78357850094616 },
+      { _id: { clase: 1, eval: 'homework' }, promedio: 49.18339520790678 },
+      { _id: { clase: 1, eval: 'quiz' }, promedio: 51.68365158823541 },
+      { _id: { clase: 2, eval: 'exam' }, promedio: 51.212269415215715 },
+      { _id: { clase: 2, eval: 'homework' }, promedio: 48.635517471345494 },
+      { _id: { clase: 2, eval: 'quiz' }, promedio: 49.22183768413837 },
+      { _id: { clase: 3, eval: 'exam' }, promedio: 49.24088016851434 },
+      { _id: { clase: 3, eval: 'homework' }, promedio: 49.32958980280401 },
+      { _id: { clase: 3, eval: 'quiz' }, promedio: 49.70705542324686 },
+      { _id: { clase: 4, eval: 'exam' }, promedio: 48.45214274611575 },
+      { _id: { clase: 4, eval: 'homework' }, promedio: 51.336198599567986 },
+      { _id: { clase: 4, eval: 'quiz' }, promedio: 52.186677392814204 },
+      { _id: { clase: 5, eval: 'exam' }, promedio: 51.91626171544547 },
+      { _id: { clase: 5, eval: 'homework' }, promedio: 49.71133512774075 },
+      { _id: { clase: 5, eval: 'quiz' }, promedio: 48.17571458478485 },
+      { _id: { clase: 6, eval: 'exam' }, promedio: 54.20236080762028 },
+      { _id: { clase: 6, eval: 'homework' }, promedio: 49.441178234623834 },
+      ...,
+      ...,
+      ...,
+  ]
+#+end_src
