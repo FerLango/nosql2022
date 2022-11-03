@@ -269,12 +269,20 @@ Con esto bajamos monetdb y lo tenemos corriendo en un conenedor de nombre ~monet
 
 #+begin_src shell
   docker volume create monet-data
-  docker run -it \
+  docker stop monetdb
+  docker rm monetdb
+  docker run \
          -v monet-data:/var/monetdb5/dbfarm \
          -p 50001:50000 \
-         --name monetdb
-         monetdb/monetdb:latest
+         --name monetdb \
+         -d monetdb/monetdb:latest
 #+end_src
+
+#+RESULTS:
+| monet-data                                                       |
+| monetdb                                                          |
+| monetdb                                                          |
+| 6ce8f681eb97b17a626fc9f7357188a7131e1772bf1b22e5a5b33dc4433527aa |
 
 Ahora para correr comandos sobre la bd:
 
@@ -301,8 +309,6 @@ docker exec -it monetdb mclient ITAM
 Funcionan en cluster, básicamente.
 
 Idóneamente debemos tener 1 nodo maestro y 1 o más nodos ~worker~.
-
-
 
 #+DOWNLOADED: screenshot @ 2022-10-13 14:23:01
 [[file:images/20221013-142301_screenshot.png]]
@@ -357,8 +363,9 @@ El operador ~release~ libera a producción la BD y ahora si podemos interactuar 
 Vamos a [[https://dev.monetdb.org/Assets/VOC/voc_dump.zip][descargar el ZIP]] con la BD, crear usuarios y cargar datos a nuestra BD ~voc~. Vamos a hacer esto con el cliente ~mclient~, que nos permite interactuar con MonetDB desde la command line:
 
 #+begin_src sh
+  monetdb create -p monetdb voc
   mclient -u monetdb -d voc
-  password: "monetdb"
+  # password: "monetdb"
   CREATE USER "voc" WITH PASSWORD 'voc' NAME 'VOC Explorer' SCHEMA "sys";
   CREATE SCHEMA "voc" AUTHORIZATION "voc";
   ALTER USER "voc" SET SCHEMA "voc";
@@ -376,7 +383,7 @@ Ahora vamos a reconectarnos con la BD ~voc~ con el usuario ~voc~ en lugar del us
 
 #+begin_src sh
   mclient -u voc -d voc
-  password: "voc"
+  # password: "voc"
   start transaction;
 
   CREATE TABLE test (id int, data varchar(30));
@@ -403,11 +410,18 @@ Qué estamos haciendo aquí?
 Vamos ahora a importar la BD que descargamos:
 
 #+begin_src sh
-  cat voc_dump.sql >  mclient -u voc -d voc
+  docker exec -i monetdb  mclient -d voc - <  voc_dump.sql
+
+  cat voc_dump.sql | docker exec -i monetdb  mclient -d voc -
+
 #+end_src
+
+#+RESULTS:
 
 Si queremos cambiarle el password al usuario ~monetdb~ podemos usar:
 
 #+begin_src sql
-  ALTER USER SET UNENCRYPTED PASSWORD 'xxxxxx' USING OLD PASSWORD 'monetdb';
+  ALTER USER SET UNENCRYPTED PASSWORD 'monetdb' USING OLD PASSWORD 'voc';
 #+end_src
+
+#+RESULTS:
